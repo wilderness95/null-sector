@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="hu">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#071111" />
+    <meta name="description" content="NULL SECTOR: véletlen pályás 3D FPS a böngésződben." />
+    <title>NULL SECTOR | Procedural FPS</title>
+  </head>
+  <body>
+    <canvas id="game" aria-label="3D játéktér"></canvas>
+    <div class="scanlines" aria-hidden="true"></div>
+    <header class="topbar">
+      <a class="brand" href="./" aria-label="Null Sector kezdőlap"><span class="brand-icon">N<span>/</span></span> NULL<span class="brand-light">SECTOR</span></a>
+      <span class="top-label">PROCEDURAL COMBAT SIMULATOR <i></i> V.01</span>
+      <button id="sound" class="small-button" aria-label="Hang bekapcsolva" aria-pressed="true">HANG: BE</button>
+    </header>
+    <main id="menu" class="overlay">
+      <section class="menu-content">
+        <div class="eyebrow"><span class="status-dot"></span> RENDSZER ONLINE <span class="separator">/</span> SOLO + 2–4 FŐS CO-OP</div>
+        <h1>NULL<br /><span>SECTOR</span><sup>01</sup></h1>
+        <p class="intro">Minden belépés egy új világ.<br />Tisztítsd meg a szektort. Találd meg a kijáratot. Éld túl.</p>
+        <div class="mission-spec"><span><b>Ø</b> VÉLETLEN PÁLYÁK</span><span><b>+</b> EGYRE NEHEZEBB SZINTEK</span></div>
+        <label class="seed-label" for="seed">PÁLYAKÓD <span>OPCIONÁLIS</span></label>
+        <div class="seed-field"><span>#</span><input id="seed" maxlength="32" placeholder="Véletlen generálás" autocomplete="off" spellcheck="false" /><button id="randomize" disabled aria-label="Új véletlen pályakód" title="Új pályakód">···</button></div>
+        <button id="start" disabled class="primary-button">KARAKTEREK BETÖLTÉSE...</button>
+        <section class="coop-menu" aria-label="Kooperatív játék">
+          <label class="seed-label" for="player-name">KOOPERATÍV BEVETÉS <span>2–4 JÁTÉKOS</span></label>
+          <div class="seed-field"><input id="player-name" maxlength="18" placeholder="Játékosneved" aria-label="Játékosneved" autocomplete="off" /></div>
+          <button id="create-room" disabled class="secondary-button">SZOBA LÉTREHOZÁSA</button>
+          <div class="join-row"><input id="room-code" maxlength="6" placeholder="SZOBAKÓD" aria-label="Szobakód" autocomplete="off" /><button id="join-room" disabled class="small-button">CSATLAKOZÁS</button></div>
+          <p id="coop-error" role="status" aria-live="polite"></p>
+        </section>
+        <div class="controls-hint"><span><kbd>W A S D</kbd> Mozgás</span><span><kbd>JOBB EGÉR</kbd> Célzás</span><span><kbd>BAL EGÉR</kbd> Sorozatlövés</span><span><kbd>R</kbd> Újratöltés</span></div>
+        <p class="touch-hint">Mobilon: bal oldalt mozgás, jobb oldalt körülnézés. CÉL: nagyítás; LÖVÉS nyomva tartva: sorozatlövés.</p>
+      </section>
+      <aside class="preview-label"><span class="corner"></span><div>ISMERETLEN TERÜLET</div><strong>SECTOR_ <span id="preview-seed">0001</span></strong><p>TOPOGRÁFIA: GENERÁLT<br />FENYEGETÉSI SZINT: EMELKEDETT</p><div class="signal-bars"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div></aside>
+      <footer class="menu-footer"><span>NINCS KÉT EGYFORMA BEVETÉS.</span><a href="/models/ATTRIBUTION.md" target="_blank" rel="noopener">KARAKTER: QUATERNIUS / CC0</a></footer>
+    </main>
+    <div id="hud" class="hidden">
+      <section class="mission-hud"><span class="eyebrow">AKTÍV BEVETÉS</span><h2>SZEKTOR <span id="level">01</span></h2><p id="objective">Semlegesítsd az őrrobotokat</p><span id="enemy-count">06 / 06</span><span class="hud-caption"> ELLENSÉG</span></section>
+      <div class="minimap-wrap"><canvas id="minimap" width="180" height="180" aria-label="Pályatérkép"></canvas><span id="map-seed"></span></div>
+      <div id="crosshair"><i></i><i></i><i></i><i></i></div><div id="hitmarker">×</div>
+      <div id="notice" role="status" aria-live="polite"></div>
+      <section id="team-hud" class="hidden"><span id="team-code"></span><div id="team-list"></div></section>
+      <div id="revive-hint" role="status"></div>
+      <button id="touch-revive" class="small-button hidden">ÚJRAÉLESZTÉS</button>
+      <div class="bottom-hud"><div class="health-block"><span class="hud-caption">VITALITÁS</span><div><b class="health-plus">+</b> <strong id="health">100</strong><small> / 100</small></div><div class="health-track"><i id="health-bar"></i></div></div><div class="weapon-block"><span class="hud-caption">VX-9 AUTO <span>/</span> GÉPKARABÉLY</span><div><strong id="ammo">30</strong><small> / <span id="reserve">120</span></small></div><span id="reload-status">R &nbsp; ÚJRATÖLTÉS</span></div></div>
+      <div class="desktop-help">JOBB EGÉR &nbsp; CÉLZÁS <span>/</span> BAL EGÉR NYOMVA &nbsp; SOROZAT <span>/</span> SHIFT &nbsp; SPRINT <span>/</span> ESC &nbsp; SZÜNET</div>
+      <button id="pause-button" class="small-button">SZÜNET</button>
+      <div id="touch-controls"><div id="look-zone" aria-label="Körülnézés"></div><div id="joystick" aria-label="Mozgás"><div id="stick"></div></div><button id="touch-aim" aria-label="Célzás" aria-pressed="false">CÉL</button><button id="touch-reload" aria-label="Újratöltés">R</button><button id="touch-fire" aria-label="Lövés">LÖVÉS</button></div>
+    </div>
+    <div id="damage" aria-hidden="true"></div>
+    <section id="lobby" class="modal hidden" aria-labelledby="lobby-title"><div class="modal-card"><span class="eyebrow">KOOPERATÍV BEVETÉS / 2–4 FŐ</span><h2 id="lobby-title">CSAPATOD</h2><p>Oszd meg a szobakódot a többiekkel:</p><strong id="lobby-code"></strong><div id="lobby-players"></div><p id="lobby-status" role="status"></p><button id="lobby-start" class="primary-button">BEVETÉS INDÍTÁSA →</button><button id="lobby-leave" class="secondary-button">KILÉPÉS A SZOBÁBÓL</button></div></section>
+    <section id="modal" class="modal hidden" aria-labelledby="modal-title"><div class="modal-card"><span id="modal-tag" class="eyebrow">KAPCSOLAT FELFÜGGESZTVE</span><h2 id="modal-title">SZÜNET</h2><p id="modal-text">A szektor megvár.</p><button id="resume" class="primary-button">FOLYTATÁS <span>→</span></button><button id="restart" class="secondary-button">ÚJ BEVETÉS</button></div></section>
+    <noscript>A játékhoz engedélyezd a JavaScriptet.</noscript>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
