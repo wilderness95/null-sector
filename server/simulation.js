@@ -1,18 +1,43 @@
 import { randomBytes } from 'node:crypto';
-import { Ray, Vector3, Box3 } from 'three';
+import { Ray, Vector3, Box3, Euler } from 'three';
 import { generateWorld, isWalkable, findPath, CELL } from '../src/world.js';
+import { WEAPONS, WEAPON_ORDER, DEFAULT_WEAPON, isWeapon, getWeapon } from '../src/data/weapons.js';
+import { getCharacter } from '../src/data/characters.js';
 
+const SWITCH_TIME = 0.4;
+const GRAVITY = 22;
+const JUMP_SPEED = 7.5;
+const EYE = 1.65;
 const distance = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
-export const idleInput = () => ({ forward: 0, strafe: 0, yaw: 0, pitch: 0, fire: false, reload: false, revive: false, sprint: false, aim: false });
+export const idleInput = () => ({ forward: 0, strafe: 0, yaw: 0, pitch: 0, fire: false, reload: false, revive: false, sprint: false, aim: false, jump: false, weapon: null, aimYaw: null, aimPitch: null });
+const freshArsenal = () => Object.fromEntries(WEAPON_ORDER.map(id => [id, { ammo: WEAPONS[id].magazine, reserve: WEAPONS[id].reserve }]));
+
+// Active weapon ammo lives on the player (ammo/reserve); other weapons are parked in `stash`.
+function equip(p, id) {
+  p.stash[p.weapon] = { ammo: p.ammo, reserve: p.reserve };
+  p.weapon = id;
+  ({ ammo: p.ammo, reserve: p.reserve } = p.stash[id]);
+  p.reloadTime = 0;
+  p.cooldown = SWITCH_TIME;
+}
+
+function resetLoadout(p) {
+  p.stash = freshArsenal();
+  p.weapon = DEFAULT_WEAPON;
+  ({ ammo: p.ammo, reserve: p.reserve } = p.stash[DEFAULT_WEAPON]);
+  p.hp = p.maxHealth;
+}
 
 export function createRoom(seed = '') {
   return { code: randomBytes(3).toString('hex').toUpperCase(), seed: seed.slice(0, 32) || randomBytes(4).toString('hex'), level: 1, revision: 0, status: 'lobby', host: null, players: new Map(), enemies: [], pickups: [], bullets: [], events: [], time: 0, kills: 0, serial: 0 };
 }
 
-export function addPlayer(room, id, name) {
+export function addPlayer(room, id, name, character) {
   if (room.status !== 'lobby') throw new Error('A bevetés már elindult. Várj a következő szobára.');
   if (room.players.size >= 4) throw new Error('A szoba megtelt (4/4).');
-  const player = { id, name: String(name || 'Játékos').trim().slice(0, 18) || 'Játékos', x: 0, z: 0, yaw: 0, pitch: 0, hp: 100, ammo: 30, reserve: 120, down: false, reviveProgress: 0, invulnerable: 0, cooldown: 0, reloadTime: 0, input: idleInput(), inputAt: room.time, moving: false };
+  const profile = getCharacter(character);
+  const player = { id, name: String(name || 'Játékos').trim().slice(0, 18) || 'Játékos', character: profile.id, maxHealth: profile.maxHealth, speed: profile.speed, jump: profile.jump, x: 0, z: 0, y: 0, vy: 0, yaw: 0, pitch: 0, hp: profile.maxHealth, weapon: DEFAULT_WEAPON, ammo: 0, reserve: 0, stash: {}, down: false, reviveProgress: 0, invulnerable: 0, cooldown: 0, reloadTime: 0, triggerHeld: false, input: idleInput(), inputAt: room.time, moving: false };
+  resetLoadout(player);
   room.players.set(id, player);
   room.host ??= id;
   return player;
@@ -42,7 +67,8 @@ export function beginLevel(room, id) {
   const yaw = open ? Math.atan2(-open[0], -open[1]) : 0;
   for (const p of room.players.values()) {
     const offset = [[-0.7, -0.7], [0.7, -0.7], [-0.7, 0.7], [0.7, 0.7]][slot++];
-    Object.assign(p, { x: room.world.spawn.x + offset[0], z: room.world.spawn.z + offset[1], yaw, pitch: 0, hp: 100, ammo: 30, reserve: 120, down: false, reviveProgress: 0, invulnerable: 3, cooldown: 0, reloadTime: 0, input: { ...idleInput(), yaw }, inputAt: room.time });
+    Object.assign(p, { x: room.world.spawn.x + offset[0], z: room.world.spawn.z + offset[1], y: 0, vy: 0, yaw, pitch: 0, down: false, reviveProgress: 0, invulnerable: 3, cooldown: 0, reloadTime: 0, triggerHeld: false, input: { ...idleInput(), yaw }, inputAt: room.time });
+    resetLoadout(p);
   }
 }
 
@@ -52,7 +78,11 @@ export function acceptInput(room, id, input) {
   p.input = {
     forward: Math.max(-1, Math.min(1, input.forward)), strafe: Math.max(-1, Math.min(1, input.strafe)),
     yaw: input.yaw % (Math.PI * 2), pitch: Math.max(-1.35, Math.min(1.35, input.pitch)),
-    ...Object.fromEntries(['fire', 'reload', 'revive', 'sprint', 'aim'].map(key => [key, input[key] === true])),
+    ...Object.fromEntries(['fire', 'reload', 'revive', 'sprint', 'aim', 'jump'].map(key => [key, input[key] === true])),
+    weapon: isWeapon(input.weapon) ? input.weapon : null,
+    // Third-person clients aim the shot from the eye at the crosshair target.
+    aimYaw: Number.isFinite(input.aimYaw) ? input.aimYaw % (Math.PI * 2) : null,
+    aimPitch: Number.isFinite(input.aimPitch) ? Math.max(-1.35, Math.min(1.35, input.aimPitch)) : null,
   };
   p.inputAt = room.time;
 }
@@ -77,34 +107,39 @@ export function hurtPlayer(player, damage) {
 }
 
 function fire(room, p) {
+  const weapon = getWeapon(p.weapon);
   p.ammo--;
-  p.cooldown = 0.09;
-  const origin = new Vector3(p.x, 1.65, p.z);
-  const direction = new Vector3(-Math.sin(p.yaw) * Math.cos(p.pitch), Math.sin(p.pitch), -Math.cos(p.yaw) * Math.cos(p.pitch));
-  const ray = new Ray(origin, direction);
+  p.cooldown = weapon.cooldown;
+  const origin = new Vector3(p.x, EYE + p.y, p.z);
+  const aim = new Euler(p.input.aimPitch ?? p.pitch, p.input.aimYaw ?? p.yaw, 0, 'YXZ');
   const point = new Vector3();
-  let nearest = 65;
-  let target = null;
-  // Server-owned hit volumes and wall geometry, never client-supplied damage or targets.
-  for (let z = 0; z < room.world.size; z++) {
-    for (let x = 0; x < room.world.size; x++) {
-      if (!room.world.grid[z][x]) continue;
-      const bounds = new Box3(new Vector3(x * CELL, 0, z * CELL), new Vector3((x + 1) * CELL, 4.12, (z + 1) * CELL));
-      if (ray.intersectBox(bounds, point)) nearest = Math.min(nearest, point.distanceTo(origin));
+  for (let pellet = 0; pellet < weapon.pellets; pellet++) {
+    const spread = () => (Math.random() - 0.5) * 2 * weapon.spread;
+    const direction = new Vector3(spread(), spread(), -1).normalize().applyEuler(aim);
+    const ray = new Ray(origin, direction);
+    let nearest = weapon.range;
+    let target = null;
+    // Server-owned hit volumes and wall geometry, never client-supplied damage or targets.
+    for (let z = 0; z < room.world.size; z++) {
+      for (let x = 0; x < room.world.size; x++) {
+        if (!room.world.grid[z][x]) continue;
+        const bounds = new Box3(new Vector3(x * CELL, 0, z * CELL), new Vector3((x + 1) * CELL, 4.12, (z + 1) * CELL));
+        if (ray.intersectBox(bounds, point)) nearest = Math.min(nearest, point.distanceTo(origin));
+      }
     }
-  }
-  for (const enemy of room.enemies) {
-    const bounds = new Box3(new Vector3(enemy.x - 0.55, 0.15, enemy.z - 0.55), new Vector3(enemy.x + 0.55, 2.4, enemy.z + 0.55));
-    if (ray.intersectBox(bounds, point) && point.distanceTo(origin) < nearest) {
-      nearest = point.distanceTo(origin);
-      target = enemy;
+    for (const enemy of room.enemies) {
+      const bounds = new Box3(new Vector3(enemy.x - 0.55, 0.15, enemy.z - 0.55), new Vector3(enemy.x + 0.55, 2.4, enemy.z + 0.55));
+      if (ray.intersectBox(bounds, point) && point.distanceTo(origin) < nearest) {
+        nearest = point.distanceTo(origin);
+        target = enemy;
+      }
     }
+    if (target) {
+      target.hp -= weapon.damage;
+      if (target.hp <= 1e-6) { room.enemies = room.enemies.filter(e => e !== target); room.kills++; }
+    }
+    room.events.push({ type: 'shot', player: p.id, weapon: weapon.id, from: origin.toArray(), to: ray.at(nearest, point).toArray(), hit: target?.id ?? null });
   }
-  if (target) {
-    target.hp--;
-    if (!target.hp) { room.enemies = room.enemies.filter(e => e !== target); room.kills++; }
-  }
-  room.events.push({ type: 'shot', player: p.id, from: origin.toArray(), to: ray.at(nearest, point).toArray(), hit: target?.id ?? null });
 }
 
 export function stepRoom(room, dt) {
@@ -117,26 +152,37 @@ export function stepRoom(room, dt) {
     p.yaw = input.yaw; p.pitch = input.pitch;
     p.moving = false;
     p.invulnerable = Math.max(0, p.invulnerable - dt);
-    if (p.down) continue;
+    if (p.down) { p.y = 0; p.vy = 0; continue; }
+    if (input.jump && p.y === 0) p.vy = JUMP_SPEED * p.jump;
+    if (p.vy !== 0 || p.y > 0) {
+      p.vy -= GRAVITY * dt;
+      p.y = Math.max(0, p.y + p.vy * dt);
+      if (p.y === 0) p.vy = 0;
+    }
     const length = Math.max(1, Math.hypot(input.forward, input.strafe));
-    const speed = input.aim ? 3.5 : input.sprint ? 9 : 5.5;
+    const speed = (input.aim ? 3.5 : input.sprint ? 9 : 5.5) * p.speed;
     const forward = input.forward / length;
     const strafe = input.strafe / length;
     move(room.world, p, (-Math.sin(p.yaw) * forward + Math.cos(p.yaw) * strafe) * speed * dt, (-Math.cos(p.yaw) * forward - Math.sin(p.yaw) * strafe) * speed * dt);
     p.moving = Math.hypot(forward, strafe) > 0.1;
+    if (input.weapon && input.weapon !== p.weapon) equip(p, input.weapon);
+    const weapon = getWeapon(p.weapon);
     p.cooldown = Math.max(0, p.cooldown - dt);
     if (p.reloadTime > 0) {
       p.reloadTime = Math.max(0, p.reloadTime - dt);
-      if (!p.reloadTime) { const amount = Math.min(30 - p.ammo, p.reserve); p.ammo += amount; p.reserve -= amount; }
+      if (!p.reloadTime) { const amount = Math.min(weapon.magazine - p.ammo, p.reserve); p.ammo += amount; p.reserve -= amount; }
     }
-    if (!p.reloadTime && p.reserve && p.ammo < 30 && (input.reload || (input.fire && !p.ammo))) p.reloadTime = 1.45;
-    if (input.fire && !input.revive && !p.reloadTime && !p.cooldown && p.ammo > 0) fire(room, p);
+    if (!p.reloadTime && p.reserve && p.ammo < weapon.magazine && (input.reload || (input.fire && !p.ammo))) p.reloadTime = weapon.reload;
+    // Semi-automatic weapons need a fresh trigger pull for every shot.
+    const pulled = input.fire && (weapon.auto || !p.triggerHeld);
+    p.triggerHeld = input.fire;
+    if (pulled && !input.revive && !p.reloadTime && !p.cooldown && p.ammo > 0) fire(room, p);
     for (let i = room.pickups.length - 1; i >= 0; i--) {
       const item = room.pickups[i];
       if (distance(p, item) > 1.2) continue;
-      if (item.type === 'health' ? p.hp >= 100 : p.reserve >= 240) continue;
-      if (item.type === 'health') p.hp = Math.min(100, p.hp + 35);
-      else p.reserve = Math.min(240, p.reserve + 36);
+      if (item.type === 'health' ? p.hp >= p.maxHealth : p.reserve >= weapon.maxReserve) continue;
+      if (item.type === 'health') p.hp = Math.min(p.maxHealth, p.hp + 35);
+      else p.reserve = Math.min(weapon.maxReserve, p.reserve + weapon.pickup);
       room.pickups.splice(i, 1);
     }
   }
@@ -179,7 +225,7 @@ export function stepRoom(room, dt) {
     for (let j = 0; j < steps; j++) {
       bullet.x += bullet.vx * dt / steps; bullet.y += bullet.vy * dt / steps; bullet.z += bullet.vz * dt / steps;
       if (!isWalkable(room.world, bullet.x, bullet.z, 0.12)) { bullet.life = 0; break; }
-      const victim = active.find(p => Math.hypot(p.x - bullet.x, 1.65 - bullet.y, p.z - bullet.z) < 0.52);
+      const victim = active.find(p => Math.hypot(p.x - bullet.x, EYE + p.y - bullet.y, p.z - bullet.z) < 0.52);
       if (victim) { hurtPlayer(victim, 9 + Math.min(room.level, 10)); bullet.life = 0; break; }
     }
     if (bullet.life <= 0) room.bullets.splice(i, 1);
@@ -191,7 +237,7 @@ export function stepRoom(room, dt) {
 export function snapshot(room) {
   return {
     type: 'state', code: room.code, seed: room.seed, level: room.level, revision: room.revision, status: room.status, host: room.host, kills: room.kills,
-    players: [...room.players.values()].map(({ input, inputAt, cooldown, invulnerable, ...p }) => p),
+    players: [...room.players.values()].map(({ input, inputAt, cooldown, invulnerable, stash, triggerHeld, ...p }) => p),
     enemies: room.enemies.map(({ path, pathTime, cooldown, ...e }) => e), pickups: room.pickups,
     bullets: room.bullets.map(({ vx, vy, vz, life, ...b }) => b), events: room.events.splice(0),
   };

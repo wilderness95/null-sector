@@ -23,6 +23,7 @@
         <div class="mission-spec"><span><b>Ø</b> VÉLETLEN PÁLYÁK</span><span><b>+</b> EGYRE NEHEZEBB SZINTEK</span></div>
         <label class="seed-label" for="seed">PÁLYAKÓD <span>OPCIONÁLIS</span></label>
         <div class="seed-field"><span>#</span><input id="seed" maxlength="32" placeholder="Véletlen generálás" autocomplete="off" spellcheck="false" /><button id="randomize" disabled aria-label="Új véletlen pályakód" title="Új pályakód">···</button></div>
+        <section class="character-select" aria-label="Karakter"><span class="seed-label">KARAKTER <span>VÁLASZD KI</span></span><div id="character-list" role="radiogroup" aria-label="Karakter"></div></section>
         <button id="start" disabled class="primary-button">KARAKTEREK BETÖLTÉSE...</button>
         <section class="coop-menu" aria-label="Kooperatív játék">
           <label class="seed-label" for="player-name">KOOPERATÍV BEVETÉS <span>2–4 JÁTÉKOS</span></label>
@@ -31,11 +32,11 @@
           <div class="join-row"><input id="room-code" maxlength="6" placeholder="SZOBAKÓD" aria-label="Szobakód" autocomplete="off" /><button id="join-room" disabled class="small-button">CSATLAKOZÁS</button></div>
           <p id="coop-error" role="status" aria-live="polite"></p>
         </section>
-        <div class="controls-hint"><span><kbd>W A S D</kbd> Mozgás</span><span><kbd>JOBB EGÉR</kbd> Célzás</span><span><kbd>BAL EGÉR</kbd> Sorozatlövés</span><span><kbd>R</kbd> Újratöltés</span></div>
+        <div class="controls-hint"><span><kbd>W A S D</kbd> Mozgás</span><span><kbd>JOBB EGÉR</kbd> Célzás</span><span><kbd>BAL EGÉR</kbd> Sorozatlövés</span><span><kbd>SPACE</kbd> Ugrás</span><span><kbd>V</kbd> Nézet</span><span><kbd>R</kbd> Újratöltés</span><span><kbd>1–5 / GÖRGŐ</kbd> Fegyver</span></div>
         <p class="touch-hint">Mobilon: bal oldalt mozgás, jobb oldalt körülnézés. CÉL: nagyítás; LÖVÉS nyomva tartva: sorozatlövés.</p>
       </section>
       <aside class="preview-label"><span class="corner"></span><div>ISMERETLEN TERÜLET</div><strong>SECTOR_ <span id="preview-seed">0001</span></strong><p>TOPOGRÁFIA: GENERÁLT<br />FENYEGETÉSI SZINT: EMELKEDETT</p><div class="signal-bars"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div></aside>
-      <footer class="menu-footer"><span>NINCS KÉT EGYFORMA BEVETÉS.</span><a href="/models/ATTRIBUTION.md" target="_blank" rel="noopener">KARAKTER: QUATERNIUS / CC0</a></footer>
+      <footer class="menu-footer"><span>NINCS KÉT EGYFORMA BEVETÉS.</span><a href="/models/ATTRIBUTION.md" target="_blank" rel="noopener">KARAKTER + FEGYVEREK: QUATERNIUS, KENNEY / CC0</a></footer>
     </main>
     <div id="hud" class="hidden">
       <section class="mission-hud"><span class="eyebrow">AKTÍV BEVETÉS</span><h2>SZEKTOR <span id="level">01</span></h2><p id="objective">Semlegesítsd az őrrobotokat</p><span id="enemy-count">06 / 06</span><span class="hud-caption"> ELLENSÉG</span></section>
@@ -45,12 +46,13 @@
       <section id="team-hud" class="hidden"><span id="team-code"></span><div id="team-list"></div></section>
       <div id="revive-hint" role="status"></div>
       <button id="touch-revive" class="small-button hidden">ÚJRAÉLESZTÉS</button>
-      <div class="bottom-hud"><div class="health-block"><span class="hud-caption">VITALITÁS</span><div><b class="health-plus">+</b> <strong id="health">100</strong><small> / 100</small></div><div class="health-track"><i id="health-bar"></i></div></div><div class="weapon-block"><span class="hud-caption">VX-9 AUTO <span>/</span> GÉPKARABÉLY</span><div><strong id="ammo">30</strong><small> / <span id="reserve">120</span></small></div><span id="reload-status">R &nbsp; ÚJRATÖLTÉS</span></div></div>
+      <div class="bottom-hud"><div class="health-block"><span class="hud-caption">VITALITÁS</span><div><b class="health-plus">+</b> <strong id="health">100</strong><small> / <span id="max-health">100</span></small></div><div class="health-track"><i id="health-bar"></i></div></div><div class="weapon-block"><div id="weapon-slots" aria-label="Fegyverek"></div><span class="hud-caption"><span id="weapon-name">VX-9 AUTO</span> <span>/</span> <span id="weapon-kind">GÉPKARABÉLY</span></span><div><strong id="ammo">30</strong><small> / <span id="reserve">120</span></small></div><span id="reload-status">R &nbsp; ÚJRATÖLTÉS</span></div></div>
       <div class="desktop-help">JOBB EGÉR &nbsp; CÉLZÁS <span>/</span> BAL EGÉR NYOMVA &nbsp; SOROZAT <span>/</span> SHIFT &nbsp; SPRINT <span>/</span> ESC &nbsp; SZÜNET</div>
       <button id="pause-button" class="small-button">SZÜNET</button>
-      <div id="touch-controls"><div id="look-zone" aria-label="Körülnézés"></div><div id="joystick" aria-label="Mozgás"><div id="stick"></div></div><button id="touch-aim" aria-label="Célzás" aria-pressed="false">CÉL</button><button id="touch-reload" aria-label="Újratöltés">R</button><button id="touch-fire" aria-label="Lövés">LÖVÉS</button></div>
+      <div id="touch-controls"><div id="look-zone" aria-label="Körülnézés"></div><div id="joystick" aria-label="Mozgás"><div id="stick"></div></div><button id="touch-aim" aria-label="Célzás" aria-pressed="false">CÉL</button><button id="touch-reload" aria-label="Újratöltés">R</button><button id="touch-weapon" aria-label="Fegyverváltás">FEGYVER</button><button id="touch-view" aria-label="Nézetváltás">NÉZET</button><button id="touch-jump" aria-label="Ugrás">UGRÁS</button><button id="touch-fire" aria-label="Lövés">LÖVÉS</button></div>
     </div>
     <div id="damage" aria-hidden="true"></div>
+    <div id="scope" aria-hidden="true"></div>
     <section id="lobby" class="modal hidden" aria-labelledby="lobby-title"><div class="modal-card"><span class="eyebrow">KOOPERATÍV BEVETÉS / 2–4 FŐ</span><h2 id="lobby-title">CSAPATOD</h2><p>Oszd meg a szobakódot a többiekkel:</p><strong id="lobby-code"></strong><div id="lobby-players"></div><p id="lobby-status" role="status"></p><button id="lobby-start" class="primary-button">BEVETÉS INDÍTÁSA →</button><button id="lobby-leave" class="secondary-button">KILÉPÉS A SZOBÁBÓL</button></div></section>
     <section id="modal" class="modal hidden" aria-labelledby="modal-title"><div class="modal-card"><span id="modal-tag" class="eyebrow">KAPCSOLAT FELFÜGGESZTVE</span><h2 id="modal-title">SZÜNET</h2><p id="modal-text">A szektor megvár.</p><button id="resume" class="primary-button">FOLYTATÁS <span>→</span></button><button id="restart" class="secondary-button">ÚJ BEVETÉS</button></div></section>
     <noscript>A játékhoz engedélyezd a JavaScriptet.</noscript>

@@ -1,7 +1,13 @@
 import * as THREE from 'three';
 import { CELL, generateWorld, isWalkable, findPath } from './world.js';
-import { loadCharacterAsset, createCharacter, setCharacterAnimation, disposeCharacter } from './characters.js';
+import { loadCharacterAsset, loadCharacterAssets, createCharacter, setCharacterAnimation, disposeCharacter } from './characters.js';
 import { CoopConnection } from './coop.js';
+import { CHARACTERS, getCharacter } from './data/characters.js';
+import { WEAPONS, WEAPON_ORDER, DEFAULT_WEAPON, getWeapon } from './data/weapons.js';
+import { loadWeaponAssets, createWeaponModel, holdWeapon } from './weapons.js';
+import { setupCharacterSelect } from './character-select.js';
+import { tone, unlockAudio, setSoundEnabled, isSoundEnabled } from './audio.js';
+import { createChaseCamera, updateChaseCamera, chaseAimAngles, loadThirdPerson, saveThirdPerson } from './third-person.js';
 import './style.css';
 
 const $ = id => document.getElementById(id);
@@ -11,7 +17,6 @@ const keys = new Set();
 const ray = new THREE.Raycaster();
 const clock = new THREE.Clock();
 const mapContext = $('minimap').getContext('2d');
-const magazine = 30;
 let renderer;
 let scene;
 let camera;
@@ -24,6 +29,23 @@ let portal;
 let enemies = [];
 let fallen = [];
 let characterAsset;
+let characterAssets;
+let weaponAssets;
+let characterSelect;
+let weaponId = DEFAULT_WEAPON;
+let selectedWeapon = DEFAULT_WEAPON;
+let stash = {};
+let muzzle = new THREE.Vector3(0, 0.02, -0.4);
+let maxHealth = 100;
+let speedScale = 1;
+let jumpScale = 1;
+let jumpY = 0;
+let jumpVelocity = 0;
+let touchJump = false;
+let chase;
+let thirdPerson = false;
+let playerModel = null;
+let playerMoving = false;
 let pickups = [];
 let projectiles = [];
 let effects = [];
@@ -31,8 +53,8 @@ let mode = 'menu';
 let seed = '';
 let level = 1;
 let health = 100;
-let ammo = magazine;
-let reserve = 120;
+let ammo = 0;
+let reserve = 0;
 let yaw = 0;
 let pitch = 0;
 let firing = false;
@@ -48,8 +70,6 @@ let damageFlash = 0;
 let hitTime = 0;
 let noticeTime = 0;
 let mapTimer = 0;
-let audio;
-let sound = true;
 let joystick = { x: 0, y: 0 };
 let coop = null;
 let coopRevision = -1;
@@ -78,28 +98,6 @@ function mesh(geometry, surface, parent, x = 0, y = 0, z = 0, sx = 1, sy = 1, sz
   return object;
 }
 
-function tone(frequency, duration = 0.1, type = 'sine', volume = 0.04, end = frequency / 3) {
-  if (!sound || !audio || audio.state !== 'running') return;
-  const oscillator = audio.createOscillator();
-  const gain = audio.createGain();
-  oscillator.type = type;
-  oscillator.frequency.setValueAtTime(frequency, audio.currentTime);
-  oscillator.frequency.exponentialRampToValueAtTime(Math.max(20, end), audio.currentTime + duration);
-  gain.gain.setValueAtTime(volume, audio.currentTime);
-  gain.gain.exponentialRampToValueAtTime(0.001, audio.currentTime + duration);
-  oscillator.connect(gain).connect(audio.destination);
-  oscillator.start();
-  oscillator.stop(audio.currentTime + duration);
-  oscillator.onended = () => { oscillator.disconnect(); gain.disconnect(); };
-}
-
-function unlockAudio() {
-  try {
-    audio ??= new (window.AudioContext || window.webkitAudioContext)();
-    audio.resume().catch(() => {});
-  } catch { /* Audio is optional when unavailable in the browser. */ }
-}
-
 function randomSeed() {
   return crypto.getRandomValues(new Uint32Array(1))[0].toString(36).toUpperCase().slice(0, 7);
 }
@@ -112,8 +110,12 @@ function notify(text, duration = 2.5) {
 function updateHud() {
   $('level').textContent = String(level).padStart(2, '0');
   $('health').textContent = Math.ceil(health);
-  $('health-bar').style.width = `${health}%`;
-  $('health-bar').style.background = health < 30 ? '#ff665b' : '#c4f76b';
+  $('max-health').textContent = maxHealth;
+  $('health-bar').style.width = `${health / maxHealth * 100}%`;
+  $('health-bar').style.background = health < maxHealth * 0.3 ? '#ff665b' : '#c4f76b';
+  $('weapon-name').textContent = getWeapon(weaponId).name;
+  $('weapon-kind').textContent = getWeapon(weaponId).kind;
+  for (const slot of $('weapon-slots').children) slot.classList.toggle('active', slot.dataset.weapon === weaponId);
   $('ammo').textContent = String(ammo).padStart(2, '0');
   $('reserve').textContent = reserve;
   $('enemy-count').textContent = `${String(enemies.length).padStart(2, '0')} / ${String(world.enemies.length).padStart(2, '0')}`;
@@ -217,6 +219,8 @@ function buildLevel(code) {
   camera.rotation.set(pitch, yaw, 0, 'YXZ');
   shotCooldown = 0;
   reloadTime = 0;
+  jumpY = 0;
+  jumpVelocity = 0;
   damageFlash = 0;
   recoil = 0;
   updateHud();
@@ -224,21 +228,47 @@ function buildLevel(code) {
 
 function buildWeapon() {
   weapon = new THREE.Group();
-  weapon.scale.setScalar(0.65);
   camera.add(weapon);
-  mesh(box, palette.dark, weapon, 0, 0, 0, 0.22, 0.24, 0.66);
-  mesh(box, palette.edge, weapon, 0, 0.14, -0.15, 0.18, 0.055, 0.65);
-  mesh(box, palette.dark, weapon, 0, -0.17, 0.16, 0.12, 0.3, 0.16);
-  mesh(box, palette.edge, weapon, 0, -0.18, -0.1, 0.13, 0.26, 0.22);
-  mesh(box, palette.dark, weapon, 0, 0.03, -0.56, 0.11, 0.13, 0.34);
-  mesh(box, palette.neon, weapon, 0.115, 0.025, -0.13, 0.008, 0.045, 0.3);
-  mesh(box, palette.neon, weapon, 0, 0.21, -0.35, 0.025, 0.08, 0.035);
-  mesh(box, palette.edge, weapon, -0.065, 0.2, 0.1, 0.025, 0.1, 0.06);
-  mesh(box, palette.edge, weapon, 0.065, 0.2, 0.1, 0.025, 0.1, 0.06);
-  flash = mesh(orb, palette.neon, weapon, 0, 0.03, -0.8, 0.25, 0.25, 0.5);
-  flash.visible = false;
-  weapon.position.set(0.28, -0.23, -0.65);
   weapon.visible = false;
+}
+
+function equipWeapon(id) {
+  const definition = getWeapon(id);
+  weaponId = definition.id;
+  weapon.clear();
+  const model = createWeaponModel(weaponAssets.get(definition.model), definition);
+  weapon.add(model.group);
+  muzzle = model.muzzle;
+  flash = mesh(orb, palette.neon, weapon, muzzle.x, muzzle.y, muzzle.z, 0.15, 0.15, 0.3);
+  flash.visible = false;
+  if (world) updateHud();
+}
+
+function resetLoadout() {
+  stash = Object.fromEntries(WEAPON_ORDER.map(id => [id, { ammo: WEAPONS[id].magazine, reserve: WEAPONS[id].reserve }]));
+  ({ ammo, reserve } = stash[DEFAULT_WEAPON]);
+  selectedWeapon = DEFAULT_WEAPON;
+  reloadTime = 0;
+  equipWeapon(DEFAULT_WEAPON);
+}
+
+function switchWeapon(id) {
+  if (mode !== 'playing' || !WEAPONS[id]) return;
+  if (coop) { selectedWeapon = id; sendCoopInput(); return; }
+  if (id === weaponId) return;
+  stash[weaponId] = { ammo, reserve };
+  ({ ammo, reserve } = stash[id]);
+  selectedWeapon = id;
+  reloadTime = 0;
+  shotCooldown = 0.4;
+  recoil = 0;
+  equipWeapon(id);
+  tone(380, 0.06, 'triangle', 0.03, 520);
+}
+
+function cycleWeapon(step) {
+  const index = WEAPON_ORDER.indexOf(selectedWeapon);
+  switchWeapon(WEAPON_ORDER[(index + step + WEAPON_ORDER.length) % WEAPON_ORDER.length]);
 }
 
 function requestControl() {
@@ -255,10 +285,12 @@ function clearInput() {
   keys.clear();
   firing = false;
   reviveHeld = false;
+  touchJump = false;
   reloadRequested = false;
   coop?.send({ type: 'input', forward: 0, strafe: 0, yaw, pitch });
   setAiming(false);
   aimBlend = 0;
+  $('scope').classList.remove('active');
   if (camera) {
     camera.fov = 76;
     camera.updateProjectionMatrix();
@@ -278,9 +310,12 @@ function startRun() {
   unlockAudio();
   seed = $('seed').value.trim() || randomSeed();
   level = 1;
-  health = 100;
-  ammo = magazine;
-  reserve = 120;
+  const character = characterSelect.selected;
+  maxHealth = character.maxHealth;
+  speedScale = character.speed;
+  jumpScale = character.jump;
+  health = maxHealth;
+  resetLoadout();
   runTime = 0;
   kills = 0;
   clearInput();
@@ -329,8 +364,8 @@ function takeDamage(amount) {
 
 function reload() {
   if (coop) { reloadRequested = true; return; }
-  if (mode !== 'playing' || reloadTime > 0 || ammo === magazine || reserve === 0) return;
-  reloadTime = 1.45;
+  if (mode !== 'playing' || reloadTime > 0 || ammo === getWeapon(weaponId).magazine || reserve === 0) return;
+  reloadTime = getWeapon(weaponId).reload;
   tone(230, 0.13, 'triangle', 0.035, 500);
   updateHud();
 }
@@ -343,54 +378,67 @@ function shoot() {
     else { shotCooldown = 0.4; tone(90, 0.04, 'square', 0.02); }
     return;
   }
+  const definition = getWeapon(weaponId);
   ammo--;
-  shotCooldown = 0.09;
-  recoil = 1;
-  tone(160, 0.12, 'sawtooth', 0.065, 35);
+  shotCooldown = definition.cooldown;
+  recoil = definition.recoil;
+  tone(...definition.sound);
   // Input can arrive between frames: raycast with the latest aim and target transforms.
   camera.rotation.set(pitch, yaw, 0, 'YXZ');
-  scene.updateMatrixWorld(true);
-  for (const enemy of enemies) {
-    for (const skin of enemy.skins) {
-      skin.computeBoundingSphere();
-      skin.computeBoundingBox();
+  refreshEnemyBounds();
+  const aim = aimAngles();
+  const aimEuler = new THREE.Euler(aim.pitch, aim.yaw, 0, 'YXZ');
+  const start = chaseView() ? new THREE.Vector3(0.25, -0.25, -0.8).applyEuler(aimEuler).add(camera.position) : weapon.localToWorld(muzzle.clone());
+  ray.far = definition.range;
+  let landed = false;
+  for (let pellet = 0; pellet < definition.pellets; pellet++) {
+    const spread = () => (Math.random() - 0.5) * 2 * definition.spread;
+    const direction = new THREE.Vector3(spread(), spread(), -1).normalize().applyEuler(aimEuler);
+    ray.set(camera.position, direction);
+    const hit = ray.intersectObjects([walls, ...enemies.map(enemy => enemy.group)], true)[0];
+    const end = hit ? hit.point : ray.ray.at(definition.range, new THREE.Vector3());
+    const trace = mesh(box, palette.neon, stage);
+    trace.position.copy(start).lerp(end, 0.5);
+    trace.scale.set(0.018, 0.018, start.distanceTo(end));
+    trace.lookAt(end);
+    effects.push({ mesh: trace, time: 0.045 });
+    if (hit?.object.userData.enemy) {
+      landed = true;
+      damageEnemy(hit.object.userData.enemy, definition.damage);
     }
   }
-  ray.setFromCamera(new THREE.Vector2(0, 0), camera);
-  const hits = ray.intersectObjects([walls, ...enemies.map(enemy => enemy.group)], true);
-  const hit = hits[0];
-  const end = hit ? hit.point : ray.ray.at(65, new THREE.Vector3());
-  const start = new THREE.Vector3(0, 0.03, -0.8);
-  weapon.localToWorld(start);
-  const length = start.distanceTo(end);
-  const trace = mesh(box, palette.neon, stage);
-  trace.position.copy(start).lerp(end, 0.5);
-  trace.scale.set(0.018, 0.018, length);
-  trace.lookAt(end);
-  effects.push({ mesh: trace, time: 0.045 });
-  if (hit?.object.userData.enemy) {
-    const enemy = hit.object.userData.enemy;
-    enemy.hp--;
+  ray.far = Infinity;
+  if (landed) {
     hitTime = 0.15;
     tone(650, 0.06, 'triangle', 0.025, 300);
-    if (enemy.hp === 0) {
-      setCharacterAnimation(enemy, 'Death');
-      enemy.deathTime = 3;
-      fallen.push(enemy);
-      enemies = enemies.filter(item => item !== enemy);
-      kills++;
-      for (let i = 0; i < 7; i++) {
-        const spark = mesh(orb, palette.red, stage, enemy.group.position.x, 1.3, enemy.group.position.z, 0.12, 0.12, 0.12);
-        effects.push({ mesh: spark, time: 0.4, velocity: new THREE.Vector3((Math.random() - 0.5) * 7, Math.random() * 5, (Math.random() - 0.5) * 7) });
-      }
-      if (!enemies.length) {
-        portal.children.slice(1).forEach(part => { part.material = palette.neon; });
-        notify('SZEKTOR TISZTA. A ZÖLD KIJÁRAT NYITVA.', 5);
-        tone(330, 0.4, 'sine', 0.05, 660);
-      }
-    }
   }
   updateHud();
+}
+
+function damageEnemy(enemy, damage) {
+  enemy.hp -= damage;
+  if (enemy.hp > 1e-6) return;
+  setCharacterAnimation(enemy, 'Death');
+  enemy.deathTime = 3;
+  fallen.push(enemy);
+  enemies = enemies.filter(item => item !== enemy);
+  kills++;
+  for (let i = 0; i < 7; i++) {
+    const spark = mesh(orb, palette.red, stage, enemy.group.position.x, 1.3, enemy.group.position.z, 0.12, 0.12, 0.12);
+    effects.push({ mesh: spark, time: 0.4, velocity: new THREE.Vector3((Math.random() - 0.5) * 7, Math.random() * 5, (Math.random() - 0.5) * 7) });
+  }
+  if (!enemies.length) {
+    portal.children.slice(1).forEach(part => { part.material = palette.neon; });
+    notify('SZEKTOR TISZTA. A ZÖLD KIJÁRAT NYITVA.', 5);
+    tone(330, 0.4, 'sine', 0.05, 660);
+  }
+  updateHud();
+}
+
+function updateScope(definition) {
+  const scoped = Boolean(definition.scope) && aimBlend > 0.9;
+  $('scope').classList.toggle('active', scoped);
+  weapon.visible = !scoped && mode !== 'menu';
 }
 
 function move(position, dx, dz, radius = 0.32) {
@@ -455,7 +503,7 @@ function updateGame(dt) {
   if (reloadTime > 0) {
     reloadTime = Math.max(0, reloadTime - dt);
     if (reloadTime === 0) {
-      const amount = Math.min(magazine - ammo, reserve);
+      const amount = Math.min(getWeapon(weaponId).magazine - ammo, reserve);
       ammo += amount;
       reserve -= amount;
       tone(500, 0.08, 'triangle');
@@ -465,26 +513,37 @@ function updateGame(dt) {
   let forward = Number(keys.has('KeyW') || keys.has('ArrowUp')) - Number(keys.has('KeyS') || keys.has('ArrowDown')) - joystick.y;
   let strafe = Number(keys.has('KeyD') || keys.has('ArrowRight')) - Number(keys.has('KeyA') || keys.has('ArrowLeft')) + joystick.x;
   const magnitude = Math.hypot(forward, strafe);
+  playerMoving = magnitude > 0.1;
   if (magnitude > 1) { forward /= magnitude; strafe /= magnitude; }
-  const speed = aiming ? 3.5 : keys.has('ShiftLeft') || keys.has('ShiftRight') ? 9 : 5.5;
+  const speed = (aiming ? 3.5 : keys.has('ShiftLeft') || keys.has('ShiftRight') ? 9 : 5.5) * speedScale;
   move(camera.position, (-Math.sin(yaw) * forward + Math.cos(yaw) * strafe) * speed * dt, (-Math.cos(yaw) * forward - Math.sin(yaw) * strafe) * speed * dt);
-  camera.position.y = 1.65 + (magnitude > 0.1 ? Math.sin(elapsed * speed * 1.8) * 0.035 : 0);
+  const jumping = keys.has('Space') || touchJump;
+  if (jumpY === 0 && jumping) jumpVelocity = 7.5 * jumpScale;
+  if (jumpVelocity !== 0 || jumpY > 0) {
+    jumpVelocity -= 22 * dt;
+    jumpY = Math.max(0, jumpY + jumpVelocity * dt);
+    if (jumpY === 0) jumpVelocity = 0;
+  }
+  camera.position.y = 1.65 + jumpY + (magnitude > 0.1 && jumpY === 0 ? Math.sin(elapsed * speed * 1.8) * 0.035 : 0);
   camera.rotation.set(pitch, yaw, 0, 'YXZ');
   aimBlend = THREE.MathUtils.damp(aimBlend, aiming && reloadTime === 0 ? 1 : 0, 18, dt);
-  const fov = THREE.MathUtils.lerp(76, 48, aimBlend);
+  const definition = getWeapon(weaponId);
+  const [baseX, baseY, baseZ] = definition.view.position;
+  const fov = THREE.MathUtils.lerp(76, definition.zoom, aimBlend);
   if (Math.abs(camera.fov - fov) > 0.01) {
     camera.fov = fov;
     camera.updateProjectionMatrix();
   }
   recoil = Math.max(0, recoil - dt * 8);
   weapon.position.set(
-    (0.28 + Math.sin(elapsed * 8) * Math.min(magnitude, 1) * 0.008) * (1 - aimBlend),
-    THREE.MathUtils.lerp(-0.23, -0.165, aimBlend) - (reloadTime > 0 ? Math.sin(reloadTime / 1.45 * Math.PI) * 0.25 : 0),
-    -0.65 + recoil * THREE.MathUtils.lerp(0.09, 0.035, aimBlend),
+    (baseX + Math.sin(elapsed * 8) * Math.min(magnitude, 1) * 0.008) * (1 - aimBlend),
+    THREE.MathUtils.lerp(baseY, baseY + 0.065, aimBlend) - (reloadTime > 0 ? Math.sin(reloadTime / definition.reload * Math.PI) * 0.25 : 0),
+    baseZ + recoil * THREE.MathUtils.lerp(0.09, 0.035, aimBlend),
   );
   weapon.rotation.x = recoil * THREE.MathUtils.lerp(0.08, 0.015, aimBlend) - (reloadTime > 0 ? 0.3 : 0);
-  if (firing) shoot();
-  flash.visible = recoil > 0.65;
+  if (firing && definition.auto) shoot();
+  flash.visible = recoil > definition.recoil * 0.65;
+  updateScope(definition);
   updateEnemies(dt);
   for (let i = fallen.length - 1; i >= 0; i--) {
     const enemy = fallen[i];
@@ -519,10 +578,10 @@ function updateGame(dt) {
     pickup.group.rotation.y += dt;
     pickup.group.position.y = 0.65 + Math.sin(elapsed * 2 + i) * 0.12;
     if (Math.hypot(camera.position.x - pickup.x, camera.position.z - pickup.z) < 1.2) {
-      if (pickup.type === 'health' && health >= 100) continue;
-      if (pickup.type === 'ammo' && reserve >= 240) continue;
-      if (pickup.type === 'health') { health = Math.min(100, health + 35); notify('+35 VITALITÁS'); }
-      else { reserve = Math.min(240, reserve + 36); notify('+36 LŐSZER'); }
+      if (pickup.type === 'health' && health >= maxHealth) continue;
+      if (pickup.type === 'ammo' && reserve >= getWeapon(weaponId).maxReserve) continue;
+      if (pickup.type === 'health') { health = Math.min(maxHealth, health + 35); notify('+35 VITALITÁS'); }
+      else { reserve = Math.min(getWeapon(weaponId).maxReserve, reserve + getWeapon(weaponId).pickup); notify(`+${getWeapon(weaponId).pickup} LŐSZER`); }
       stage.remove(pickup.group);
       pickups.splice(i, 1);
       tone(520, 0.15, 'sine', 0.035, 800);
@@ -570,7 +629,7 @@ function connectCoop(type) {
     },
   );
   coop = connection;
-  connection.connect({ type, name: $('player-name').value, code: $('room-code').value, seed: $('seed').value.trim() });
+  connection.connect({ type, name: $('player-name').value, code: $('room-code').value, seed: $('seed').value.trim(), character: characterSelect.selected.id });
 }
 
 function receiveCoop(state) {
@@ -585,7 +644,7 @@ function receiveCoop(state) {
     $('lobby-code').textContent = state.code;
     $('lobby-players').replaceChildren(...state.players.map(p => {
       const row = document.createElement('div');
-      row.textContent = `${p.id === state.host ? '[GAZDA] ' : ''}${p.name}${p.id === coop.id ? ' (TE)' : ''}`;
+      row.textContent = `${p.id === state.host ? '[GAZDA] ' : ''}${p.name} [${getCharacter(p.character).name}]${p.id === coop.id ? ' (TE)' : ''}`;
       return row;
     }));
     $('lobby-start').disabled = !host || state.players.length < 2;
@@ -605,7 +664,9 @@ function receiveCoop(state) {
     showModal('CSAPAT ÖSSZEÁLLT', `SZEKTOR ${level}`, 'Közös bevetés. E nyomva tartva: közeli társ újraélesztése. A szünetmenü nem állítja meg a játékot.', 'BELÉPÉS A BEVETÉSBE →');
   }
   if (me.hp < health) damageFlash = 0.75;
+  maxHealth = me.maxHealth; speedScale = me.speed; jumpScale = me.jump;
   health = me.hp; ammo = me.ammo; reserve = me.reserve; reloadTime = me.reloadTime; kills = state.kills;
+  if (me.weapon !== weaponId) equipWeapon(me.weapon);
   const enemyIds = new Set(state.enemies.map(e => e.id));
   for (const enemy of enemies.filter(e => !enemyIds.has(e.id))) {
     setCharacterAnimation(enemy, 'Death'); enemy.deathTime = 3; fallen.push(enemy);
@@ -621,7 +682,7 @@ function receiveCoop(state) {
   }
   for (const p of state.players.filter(p => p.id !== coop.id)) {
     if (!teammates.has(p.id)) {
-      const character = createCharacter(characterAsset, 1);
+      const character = createCharacter(characterAssets.get(getCharacter(p.character).model), getCharacter(p.character));
       character.group.position.set(p.x, 0, p.z);
       // Cyan beacon distinguishes teammates from hostile robots at a distance.
       mesh(orb, palette.health, character.group, 0, 2.8, 0, 0.16, 0.16, 0.16);
@@ -655,7 +716,7 @@ function receiveCoop(state) {
   $('team-list').replaceChildren(...state.players.map(p => {
     const row = document.createElement('div'); row.dataset.player = p.id;
     row.className = p.down ? 'down' : '';
-    row.textContent = `${p.name}${p.id === coop.id ? ' (TE)' : ''} / ${p.down ? `FÖLDÖN ${Math.round(p.reviveProgress / 3 * 100)}%` : `${p.hp} HP`}`;
+    row.textContent = `${p.name}${p.id === coop.id ? ' (TE)' : ''} / ${p.down ? `FÖLDÖN ${Math.round(p.reviveProgress / 3 * 100)}%` : `${Math.ceil(p.hp)} HP`}`;
     return row;
   }));
   updateHud();
@@ -672,11 +733,12 @@ function receiveCoop(state) {
 function sendCoopInput() {
   if (!coop?.state || coop.state.status !== 'playing') return;
   const active = mode === 'playing';
-  coop.send({ type: 'input',
+  const aim = active && firing && chaseView() ? aimAngles() : null;
+  coop.send({ type: 'input', aimYaw: aim?.yaw ?? null, aimPitch: aim?.pitch ?? null,
     forward: active ? Number(keys.has('KeyW') || keys.has('ArrowUp')) - Number(keys.has('KeyS') || keys.has('ArrowDown')) - joystick.y : 0,
     strafe: active ? Number(keys.has('KeyD') || keys.has('ArrowRight')) - Number(keys.has('KeyA') || keys.has('ArrowLeft')) + joystick.x : 0,
     yaw, pitch, fire: active && firing, reload: active && reloadRequested, revive: active && (keys.has('KeyE') || reviveHeld),
-    sprint: keys.has('ShiftLeft') || keys.has('ShiftRight'), aim: aiming,
+    sprint: keys.has('ShiftLeft') || keys.has('ShiftRight'), aim: aiming, jump: active && (keys.has('Space') || touchJump), weapon: selectedWeapon,
   });
   reloadRequested = false;
 }
@@ -689,23 +751,29 @@ function updateCoop(dt) {
   const blend = 1 - Math.exp(-18 * dt);
   camera.position.x = THREE.MathUtils.lerp(camera.position.x, me.x, blend);
   camera.position.z = THREE.MathUtils.lerp(camera.position.z, me.z, blend);
-  camera.position.y = THREE.MathUtils.damp(camera.position.y, me.down ? 0.65 : 1.65, 12, dt);
+  camera.position.y = THREE.MathUtils.damp(camera.position.y, me.down ? 0.65 : 1.65 + me.y, 12, dt);
   camera.rotation.set(pitch, yaw, 0, 'YXZ');
   weapon.visible = !me.down;
   aimBlend = THREE.MathUtils.damp(aimBlend, aiming && !me.down && !reloadTime ? 1 : 0, 18, dt);
-  camera.fov = THREE.MathUtils.lerp(76, 48, aimBlend); camera.updateProjectionMatrix();
+  const definition = getWeapon(weaponId);
+  const [baseX, baseY, baseZ] = definition.view.position;
+  camera.fov = THREE.MathUtils.lerp(76, definition.zoom, aimBlend); camera.updateProjectionMatrix();
   recoil = Math.max(0, recoil - dt * 8);
-  weapon.position.set(0.28 * (1 - aimBlend), THREE.MathUtils.lerp(-0.23, -0.165, aimBlend) - (reloadTime > 0 ? 0.2 : 0), -0.65 + recoil * 0.05);
+  weapon.position.set(baseX * (1 - aimBlend), THREE.MathUtils.lerp(baseY, baseY + 0.065, aimBlend) - (reloadTime > 0 ? 0.2 : 0), baseZ + recoil * 0.05);
   weapon.rotation.x = recoil * 0.025;
-  flash.visible = recoil > 0.65;
+  flash.visible = recoil > definition.recoil * 0.65;
+  if (!me.down) updateScope(definition);
+  else $('scope').classList.remove('active');
   for (const character of [...enemies, ...teammates.values()]) {
     const p = character.network;
     if (!p) continue;
     character.group.position.x = THREE.MathUtils.lerp(character.group.position.x, p.x, blend);
     character.group.position.z = THREE.MathUtils.lerp(character.group.position.z, p.z, blend);
+    character.group.position.y = THREE.MathUtils.lerp(character.group.position.y, p.y ?? 0, blend);
     const rotation = teammates.has(p.id) ? p.yaw + Math.PI : p.yaw;
     character.group.rotation.y += Math.atan2(Math.sin(rotation - character.group.rotation.y), Math.cos(rotation - character.group.rotation.y)) * blend;
-    setCharacterAnimation(character, p.down ? 'Death' : p.moving ? 'Walking' : 'Idle');
+    holdWeapon(character, weaponAssets, getWeapon(p.weapon));
+    setCharacterAnimation(character, p.down ? 'Death' : p.y > 0.05 ? 'Jumping' : p.moving ? 'Walking' : 'Idle');
     character.mixer.update(dt);
   }
   for (let i = fallen.length - 1; i >= 0; i--) {
@@ -780,7 +848,68 @@ function animate() {
   }
   $('damage').style.opacity = damageFlash;
   $('hitmarker').style.opacity = hitTime > 0 ? 1 : 0;
-  renderer.render(scene, camera);
+  const chaseActive = chaseView();
+  if (chaseActive) {
+    updateChaseCamera(chase, chaseOptions());
+    updatePlayerModel(dt);
+    weapon.visible = false;
+  } else if (playerModel) playerModel.character.group.visible = false;
+  renderer.render(scene, chaseActive ? chase : camera);
+}
+
+function chaseOptions() {
+  return { eye: camera.position, yaw, pitch, aim: aimBlend, fov: camera.fov, walls };
+}
+
+// The scoped sniper view always switches back to the first-person camera.
+function chaseView() {
+  const scoped = getWeapon(weaponId).scope && aimBlend > 0.9;
+  return thirdPerson && !scoped && ['playing', 'paused', 'dead', 'cleared'].includes(mode);
+}
+
+function refreshEnemyBounds() {
+  scene.updateMatrixWorld(true);
+  for (const enemy of enemies) {
+    for (const skin of enemy.skins) {
+      skin.computeBoundingSphere();
+      skin.computeBoundingBox();
+    }
+  }
+}
+
+function aimAngles() {
+  if (!chaseView()) return { yaw, pitch };
+  updateChaseCamera(chase, chaseOptions());
+  refreshEnemyBounds();
+  return chaseAimAngles(chase, { eye: camera.position, yaw, pitch, targets: [walls, ...enemies.map(enemy => enemy.group)] });
+}
+
+function updatePlayerModel(dt) {
+  const me = coop?.state?.players.find(p => p.id === coop.id);
+  const definition = getCharacter(coop ? me?.character : characterSelect.selected.id);
+  if (playerModel?.id !== definition.id) {
+    if (playerModel) disposeCharacter(playerModel.character);
+    const character = createCharacter(characterAssets.get(definition.model), definition);
+    scene.add(character.group);
+    playerModel = { id: definition.id, character };
+  }
+  const { character } = playerModel;
+  const down = coop ? me?.down : mode === 'dead';
+  const moving = coop ? me?.moving : playerMoving;
+  const sprinting = keys.has('ShiftLeft') || keys.has('ShiftRight');
+  character.group.visible = true;
+  character.group.position.set(camera.position.x, down ? 0 : coop ? Math.max(0, camera.position.y - 1.65) : jumpY, camera.position.z);
+  character.group.rotation.y = yaw + Math.PI;
+  holdWeapon(character, weaponAssets, getWeapon(weaponId));
+  const airborne = coop ? me?.y > 0.05 : jumpY > 0.05;
+  setCharacterAnimation(character, down ? 'Death' : airborne ? 'Jumping' : moving ? (sprinting ? 'Running' : 'Walking') : 'Idle');
+  character.mixer.update(dt);
+}
+
+function toggleView() {
+  thirdPerson = !thirdPerson;
+  saveThirdPerson(thirdPerson);
+  notify(thirdPerson ? 'NÉZET: HARMADIK SZEMÉLY' : 'NÉZET: ELSŐ SZEMÉLY', 1.5);
 }
 
 function init() {
@@ -793,6 +922,8 @@ function init() {
   scene.background = new THREE.Color(0x0b191b);
   scene.fog = new THREE.FogExp2(0x102323, 0.014);
   camera = new THREE.PerspectiveCamera(76, innerWidth / innerHeight, 0.05, 180);
+  chase = createChaseCamera(76, innerWidth / innerHeight);
+  thirdPerson = loadThirdPerson();
   camera.rotation.order = 'YXZ';
   scene.add(camera);
   scene.add(new THREE.HemisphereLight(0xc4edc8, 0x172c35, 2.5));
@@ -802,6 +933,15 @@ function init() {
   const headlight = new THREE.PointLight(0xd5ffd0, 8, 17, 1.5);
   camera.add(headlight);
   buildWeapon();
+  equipWeapon(DEFAULT_WEAPON);
+  $('weapon-slots').replaceChildren(...WEAPON_ORDER.map((id, index) => {
+    const slot = document.createElement('span');
+    slot.dataset.weapon = id;
+    slot.textContent = index + 1;
+    slot.title = WEAPONS[id].name;
+    return slot;
+  }));
+  characterSelect = setupCharacterSelect($('character-list'));
   seed = randomSeed();
   $('preview-seed').textContent = seed.slice(0, 4);
   buildLevel(`${seed}:1`);
@@ -827,9 +967,9 @@ function init() {
     if (mode === 'dead') { $('seed').value = seed; startRun(); return; }
     if (mode === 'cleared') {
       level++;
-      health = Math.min(100, health + 30);
-      ammo = magazine;
-      reserve = Math.min(240, reserve + 72);
+      health = Math.min(maxHealth, health + 30);
+      ammo = getWeapon(weaponId).magazine;
+      reserve = Math.min(getWeapon(weaponId).maxReserve, reserve + getWeapon(weaponId).pickup * 2);
       buildLevel(`${seed}:${level}`);
       notify('ÚJ SZEKTOR. MARADJ MOZGÁSBAN!', 3);
     }
@@ -859,16 +999,24 @@ function init() {
     reviveHeld = true;
   });
   for (const name of ['pointerup', 'pointercancel', 'lostpointercapture']) $('touch-revive').addEventListener(name, () => { reviveHeld = false; });
+  $('touch-jump').addEventListener('pointerdown', event => {
+    event.preventDefault();
+    $('touch-jump').setPointerCapture(event.pointerId);
+    touchJump = true;
+  });
+  for (const name of ['pointerup', 'pointercancel', 'lostpointercapture']) $('touch-jump').addEventListener(name, () => { touchJump = false; });
   $('pause-button').addEventListener('click', () => pause());
   $('sound').addEventListener('click', () => {
-    sound = !sound;
-    if (sound) unlockAudio();
+    setSoundEnabled(!isSoundEnabled());
+    const sound = isSoundEnabled();
     $('sound').textContent = sound ? 'HANG: BE' : 'HANG: KI';
     $('sound').setAttribute('aria-pressed', String(sound));
     $('sound').setAttribute('aria-label', sound ? 'Hang bekapcsolva' : 'Hang kikapcsolva');
   });
   window.addEventListener('resize', () => {
     camera.aspect = innerWidth / innerHeight;
+    chase.aspect = camera.aspect;
+    chase.updateProjectionMatrix();
     camera.updateProjectionMatrix();
     renderer.setSize(innerWidth, innerHeight);
   });
@@ -889,8 +1037,14 @@ function init() {
     if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyR', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(event.code)) event.preventDefault();
     keys.add(event.code);
     if (event.code === 'KeyR') reload();
+    if (event.code === 'KeyV' && !event.repeat) toggleView();
+    const slot = /^Digit(\d)$/.exec(event.code);
+    if (slot) switchWeapon(WEAPON_ORDER[Number(slot[1]) - 1]);
     if (event.code === 'Escape') pause();
   });
+  document.addEventListener('wheel', event => {
+    if (mode === 'playing' && Math.abs(event.deltaY) > 0) cycleWeapon(Math.sign(event.deltaY));
+  }, { passive: true });
   document.addEventListener('keyup', event => keys.delete(event.code));
   canvas.addEventListener('mousedown', event => {
     if (mode !== 'playing' || document.pointerLockElement !== canvas) return;
@@ -975,6 +1129,8 @@ function setupTouch() {
     $('touch-fire').addEventListener(name, () => { firing = false; });
   }
   $('touch-reload').addEventListener('click', reload);
+  $('touch-weapon').addEventListener('click', () => cycleWeapon(1));
+  $('touch-view').addEventListener('click', () => { if (mode === 'playing') toggleView(); });
   $('touch-aim').addEventListener('click', () => {
     if (mode === 'playing') setAiming(!aiming);
   });
@@ -983,6 +1139,8 @@ function setupTouch() {
 async function boot() {
   try {
     characterAsset = await loadCharacterAsset();
+    characterAssets = await loadCharacterAssets(Object.values(CHARACTERS));
+    weaponAssets = await loadWeaponAssets();
     init();
     $('start').disabled = false;
     $('start').innerHTML = 'BELÉPÉS A SZEKTORBA <span>→</span>';

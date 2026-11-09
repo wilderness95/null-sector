@@ -60,8 +60,14 @@ nincs fiókos hitelesítés. A szerver legfeljebb 32 szobát és 128 kapcsolatot
 - Semlegesíts minden őrrobotot, majd lépj a minimapon jelölt zöld kijárathoz.
 - A következő szektorban több, gyorsabb és erősebb őrrobot vár.
 - A zöld csomag életerőt, a sárga lőszert ad. Ezek a minimapon is láthatók.
-- Az őrrobotok három találatot bírnak. A falak mindkét fél lövéseit megállítják.
-- A VX-9 AUTO gépkarabély 30-as tárral, folyamatos sorozatlövéssel működik. Üres tárnál nyomva tartott tűzgomb mellett automatikusan újratölt, ha van tartalék lőszer.
+- Az őrrobotok három életerőt bírnak (a fegyverek sebzése ehhez van mérve). A falak mindkét fél lövéseit megállítják.
+- Öt fegyver érhető el, mindegyiknek külön tára és tartaléka van: `1` VX-9 AUTO gépkarabély, `2` P-12 pisztoly, `3` BREACH-8 srotos, `4` LONGSHOT-S távcsöves puska (célzáskor távcső-nézet), `5` HX-60 nehéz géppuska. Váltás: számbillentyűk, egérgörgő vagy a mobil FEGYVER gomb. A pisztoly, a srotos és a puska félautomata: minden lövéshez új kattintás kell.
+- A menüben karaktert választhatsz (VANGUARD, SCOUT, BULWARK); mindegyiknek saját 3D modellje van (Kenney Mini Characters, CC0), harmadik személy nézetben a kezében a kiválasztott fegyver modelljét tartja, és eltérő életerővel, sebességgel és ugrómagassággal rendelkezik, co-opban is.
+
+### Bővítés
+
+- Új fegyver: új bejegyzés a `src/data/weapons.js` fájlban + egy GLB a `public/models/weapons/` mappában. A kliens és a szerver ugyanazt a leírást használja, a HUD és a váltás automatikusan követi.
+- Új karakter: új bejegyzés a `src/data/characters.js` fájlban; a választó kártyák a regiszterből generálódnak.
 
 | Vezérlés | Művelet |
 | --- | --- |
@@ -69,7 +75,10 @@ nincs fiókos hitelesítés. A szerver legfeljebb 32 szobát és 128 kapcsolatot
 | Egér | Körülnézés |
 | Jobb egérgomb nyomva | Nagyított célzás, középre emelt fegyver és finomabb egérmozgás |
 | Bal egérgomb nyomva | Automata sorozatlövés, célzás közben is |
+| Szóköz | Ugrás (a kasztok eltérő magasra ugranak) |
+| V | Nézetváltás: első / harmadik személy (a választás megmarad; mobilon NÉZET gomb) |
 | R | Újratöltés |
+| 1–5 / egérgörgő | Fegyverváltás |
 | Shift | Sprint |
 | Esc | Szünet, egér feloldása |
 
@@ -86,6 +95,7 @@ Járás-, futás-, várakozás- és halálanimációi külön csontvázzal futna
 ellenfélen. A kb. 454 kB-os modell helyben található a
 `public/models/RobotExpressive.glb` fájlban; nincs külső modellfüggőség futásidőben.
 A pontos forrás és licenchivatkozás: [ATTRIBUTION.md](public/models/ATTRIBUTION.md).
+A fegyvermodellek a Kenney Blaster Kit (**CC0 1.0**) darabjai.
 
 ```sh
 npm test

@@ -38,7 +38,7 @@ export function attachCoop(server) {
             room = rooms.get(String(msg.code || '').trim().toUpperCase());
             if (!room) throw new Error('Nincs ilyen szobakód.');
           }
-          addPlayer(room, socket.id, msg.name);
+          addPlayer(room, socket.id, msg.name, msg.character);
           rooms.set(room.code, room);
           socket.room = room;
           send(socket, { type: 'welcome', id: socket.id, code: room.code });
